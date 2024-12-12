@@ -4,14 +4,15 @@
 #    "sys",
 #    "os",
 #    "shutil",
+#    "requests",
 #    "pandas",
 #    "seaborn",
 #    "matplotlib",
 #    "sklearn",
-#    "scipy"
+#    "scipy",
+#    "logging"
 #]
 #///
-
 
 import sys
 import os
@@ -26,15 +27,25 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.impute import SimpleImputer
 import numpy as np
 from scipy.stats import skew
+import logging
 
 
+# Constants for configurable values
+MAX_TOKENS = 10
+FIGURE_SIZE = (5, 5)
+OUTLIER_CONTAMINATION = 0.1  # Proportion of outliers expected
+ENCODINGS = ['utf-8', 'latin1', 'windows-1252', 'utf-16', 'iso-8859-2', 'cp1250', 'mac-roman']
+
+# API settings
 API_URL = "https://aiproxy.sanand.workers.dev/openai/v1/chat/completions"
-AIPROXY_TOKEN = os.getenv("AIRPROXY_TOKEN")
+AIPROXY_TOKEN = os.getenv("AIPROXY_TOKEN")
+
 if not AIPROXY_TOKEN:
-    print("Error: AIPROXY_TOKEN environment variable is not set.")
+    logging.error("Error: AIPROXY_TOKEN environment variable is not set.")
     sys.exit(1)
 
-def load_data(file_path, encodings=['utf-8', 'latin1', 'windows-1252', 'utf-16', 'iso-8859-2', 'cp1250', 'mac-roman']):
+
+def load_data(file_path, encodings=ENCODINGS):
     """
     Load the CSV data into a pandas DataFrame with specified encodings.
     Tries each encoding in the list until it successfully loads the data.
@@ -42,24 +53,25 @@ def load_data(file_path, encodings=['utf-8', 'latin1', 'windows-1252', 'utf-16',
     for encoding in encodings:
         try:
             data = pd.read_csv(file_path, encoding=encoding)
-            print(f"Data loaded successfully with {data.shape[0]} rows and {data.shape[1]} columns using {encoding} encoding.")
+            logging.info(f"Data loaded successfully with {data.shape[0]} rows and {data.shape[1]} columns using {encoding} encoding.")
             return data
         except UnicodeDecodeError:
-            print(f"Error with {encoding} encoding. Trying next encoding...")
+            logging.warning(f"Error with {encoding} encoding. Trying next encoding...")
         except Exception as e:
-            print(f"Error loading data with {encoding} encoding: {e}")
+            logging.error(f"Error loading data with {encoding} encoding: {e}")
             return None
     
-    # If none of the encodings worked, return None
-    print("Failed to load data with all attempted encodings.")
+    logging.error("Failed to load data with all attempted encodings.")
     return None
 
-def perform_generic_analysis(df):
+
+def perform_generic_analysis(df, include_outliers=True):
     """Performs basic statistical and data analysis on the dataset."""
     analysis = {}
 
     # Ensure dataframe is not empty
     if df.empty:
+        logging.warning("The dataframe is empty.")
         return {"error": "The dataframe is empty"}
 
     # Data structure and summary stats
@@ -86,7 +98,7 @@ def perform_generic_analysis(df):
     df[analysis['numerical_features']] = imputer.fit_transform(numerical_features_for_imputation)
 
     # Correlation heatmap (512x512 px)
-    plt.figure(figsize=(5, 5))
+    plt.figure(figsize=FIGURE_SIZE)
 
     # Ensure that we only compute correlation on numerical features
     numerical_df = df[analysis['numerical_features']].select_dtypes(include=np.number)
@@ -95,18 +107,17 @@ def perform_generic_analysis(df):
     correlation_matrix = numerical_df.corr()
 
     # Plot the heatmap if there are numerical columns
+    heatmap_path = None
     if not correlation_matrix.empty:
         sns.heatmap(correlation_matrix, annot=True, cmap='coolwarm', fmt=".2f")
         heatmap_path = "correlation_heatmap.png"
         plt.savefig(heatmap_path, dpi=100)
         plt.close()
-    else:
-        heatmap_path = None
 
     # PCA analysis (512x512 px)
     pca_path = None
     if len(analysis['numerical_features']) > 1:
-        plt.figure(figsize=(5, 5))
+        plt.figure(figsize=FIGURE_SIZE)
         # Standardize the numerical features for PCA
         df_scaled = StandardScaler().fit_transform(df[analysis['numerical_features']])
         pca = PCA(n_components=2)
@@ -121,13 +132,13 @@ def perform_generic_analysis(df):
 
     # Outlier detection using Isolation Forest (512x512 px)
     outlier_path = None
-    if len(analysis['numerical_features']) > 1:
-        isolation_forest = IsolationForest(contamination=0.1)
+    if include_outliers and len(analysis['numerical_features']) > 1:
+        isolation_forest = IsolationForest(contamination=OUTLIER_CONTAMINATION)
         outliers = isolation_forest.fit_predict(df[analysis['numerical_features']])
         df['outliers'] = outliers
         
         # Scatter plot of the outliers
-        plt.figure(figsize=(5, 5))
+        plt.figure(figsize=FIGURE_SIZE)
         sns.scatterplot(x=df.iloc[:, 0], y=df.iloc[:, 1], hue=df['outliers'], palette='coolwarm')
         outlier_path = "outliers.png"
         plt.savefig(outlier_path, dpi=100)
@@ -136,14 +147,12 @@ def perform_generic_analysis(df):
     # Collecting the analysis results
     analysis['plots'] = [heatmap_path, pca_path, outlier_path]
     return analysis
- 
+
 
 # Generate the LLM prompt based on the analysis
-def generate_llm_prompt(analysis, include_images=True):
+def generate_llm_prompt(analysis):
     """Generate prompt for LLM integration based on analysis."""
- 
     image_paths = f"Images: {', '.join(analysis['plots'])}"
-
 
     prompt = f"""
     Dataset Description:
@@ -175,59 +184,72 @@ def save_narrative_to_readme(narrative, folder):
     with open(readme_path, "w") as readme_file:
         readme_file.write(narrative)
 
+
 def query_llm(prompt):
     headers = {
         "Authorization": f"Bearer {AIPROXY_TOKEN}",
         "Content-Type": "application/json"
-        }
+    }
     payload = {
         "model": "gpt-4o-mini",
-        "messages": [{"role":"system", "content":"You are a data analyst."},{"role":"user", "content": prompt}],
-        "max_tokens": 1000,
-        "temperature":0.7
+        "messages": [{"role": "system", "content": "You are a data analyst."}, {"role": "user", "content": prompt}],
+        "max_tokens": MAX_TOKENS,
+        "temperature": 0.7
     }
-    response = requests.post(API_URL, headers=headers, json=payload)
-    response.raise_for_status()
-    result = response.json()
-    return result["choices"][0]["message"]["content"].strip()
+    try:
+        response = requests.post(API_URL, headers=headers, json=payload)
+        response.raise_for_status()
+        result = response.json()
+        return result["choices"][0]["message"]["content"].strip()
+    except requests.exceptions.RequestException as e:
+        logging.error(f"API request failed: {e}") 
+        return "Error: Could not generate response from LLM."
 
-def main(dataset_path, include_images=True):
+
+def main(dataset_path, include_outliers=True):
     """Main function to load dataset, perform analysis, and generate LLM narrative."""
-
     # Load data
     df = load_data(dataset_path)
+    
+    if df is None:
+        logging.error("Data loading failed. Exiting")
+        sys.exit(1)
+    
+    # Create a unique folder based on the CSV filename 
+    dataset_name = os.path.splitext(os.path.basename(dataset_path))[0] 
+    output_folder = f"analysis_{dataset_name}" 
 
-    # 1. **Create a unique folder based on the CSV filename**  
-    dataset_name = os.path.splitext(os.path.basename(dataset_path))[0]  # Highlighted: Extract base name of CSV
-    output_folder = f"analysis_{dataset_name}"  # Highlighted: Name the folder based on the CSV file name
-
-    # 2. **Create the directory if it doesn't exist**  
-    if not os.path.exists(output_folder):  # Highlighted: Check if folder exists and create it if it doesn't
-        os.makedirs(output_folder)
+    # Create the directory if it doesn't exist
+    try:
+        os.makedirs(output_folder, exist_ok=True)
+    except OSError as e:
+        logging.error(f"Error creating folder: {e}")
+        sys.exit(1)
 
     # Perform generic analysis
-    analysis = perform_generic_analysis(df)
+    analysis = perform_generic_analysis(df, include_outliers)
 
     # Generate prompt for LLM
-    prompt = generate_llm_prompt(analysis, include_images)
+    prompt = generate_llm_prompt(analysis)
 
     # Get LLM's narrative
     narrative = query_llm(prompt)
 
     # Save the narrative to README.md inside the folder
-    save_narrative_to_readme(narrative, output_folder)  # Highlighted: Save README inside the new folder
+    save_narrative_to_readme(narrative, output_folder)
 
-    # 3. **Move the plots to the folder**  
-    for plot_path in analysis['plots']:  # Highlighted: Iterate over the plots
-        if plot_path:  # If the plot exists
-            shutil.move(plot_path, os.path.join(output_folder, os.path.basename(plot_path)))  # Highlighted: Move the plot into the folder
+    # Move the plots to the folder
+    for plot_path in analysis['plots']: 
+        if plot_path: 
+            shutil.move(plot_path, os.path.join(output_folder, os.path.basename(plot_path)))
 
     # Print analysis and narrative paths
-    print(f"Analysis complete. Plots saved in: {output_folder}")
-    print("Narrative saved in README.md")
+    logging.info(f"Analysis complete. Plots saved in: {output_folder}")
+    logging.info("Narrative saved in README.md")
+
 
 if len(sys.argv) < 2:
-    print("Usage: python autolysis.py <dataset.csv>")
+    logging.error("Usage: uv autolysis.py <dataset.csv>")
     sys.exit(1)
 
 # Retrieve the CSV file from the command-line argument
