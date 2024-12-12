@@ -31,7 +31,7 @@ import logging
 
 
 # Constants for configurable values
-MAX_TOKENS = 10
+MAX_TOKENS = 1000
 FIGURE_SIZE = (5, 5)
 OUTLIER_CONTAMINATION = 0.1  # Proportion of outliers expected
 ENCODINGS = ['utf-8', 'latin1', 'windows-1252', 'utf-16', 'iso-8859-2', 'cp1250', 'mac-roman']
