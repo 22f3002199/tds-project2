@@ -98,6 +98,9 @@ def perform_generic_analysis(df, include_outliers=True):
     imputer = SimpleImputer(strategy='mean')  # Impute missing values with mean
     df[analysis['numerical_features']] = imputer.fit_transform(numerical_features_for_imputation)
 
+    # Store numerical features for later use in plots
+    numerical_features_to_plot = analysis['numerical_features'][:2]  # Take the first two numerical features for plotting
+
     # Correlation heatmap (512x512 px)
     plt.figure(figsize=FIGURE_SIZE)
     numerical_df = df[analysis['numerical_features']].select_dtypes(include=np.number)
@@ -106,31 +109,34 @@ def perform_generic_analysis(df, include_outliers=True):
     # Plot the heatmap if there are numerical columns
     heatmap_path = None
     if not correlation_matrix.empty:
-        sns.heatmap(correlation_matrix, annot=True, cmap='coolwarm', fmt=".2f")
+        sns.heatmap(correlation_matrix, annot=True, cmap='coolwarm', fmt=".2f", cbar_kws={'label': 'Correlation coefficient'})
         
-        # **Added Titles and Axis Labels**
-        plt.title("Correlation Heatmap of Numerical Features")  # Title for the heatmap
-        plt.xlabel("Features")  # X-axis label
-        plt.ylabel("Features")  # Y-axis label
-        
+        # **Added Titles, Axis Labels, and Colorbar**
+        plt.title("Correlation Heatmap of Numerical Features", fontsize=14)
+        plt.xlabel("Features", fontsize=12)
+        plt.ylabel("Features", fontsize=12)
+        plt.xticks(rotation=45, ha="right", fontsize=10)  # Rotate feature names for better visibility
+        plt.yticks(rotation=45, ha="right", fontsize=10)
+
         heatmap_path = "correlation_heatmap.png"
         plt.savefig(heatmap_path, dpi=100)
         plt.close()
 
     # PCA Analysis (512x512 px)
     pca_path = None
-    if len(analysis['numerical_features']) > 1:
+    if len(numerical_features_to_plot) > 1:
         plt.figure(figsize=FIGURE_SIZE)
-        df_scaled = StandardScaler().fit_transform(df[analysis['numerical_features']])
+        df_scaled = StandardScaler().fit_transform(df[numerical_features_to_plot])
         pca = PCA(n_components=2)
         pca_result = pca.fit_transform(df_scaled)
 
-        # **Added Titles and Axis Labels for PCA plot with specific feature names**
-        pca_feature_names = analysis['numerical_features'][:2]  # Take the first two numerical features
-        plt.scatter(pca_result[:, 0], pca_result[:, 1])  # Scatter plot of PCA components
-        plt.title(f"PCA Analysis: {pca_feature_names[0]} vs {pca_feature_names[1]}")  # Title with feature names
-        plt.xlabel(f"Principal Component 1 ({pca_feature_names[0]})")  # X-axis label with feature name
-        plt.ylabel(f"Principal Component 2 ({pca_feature_names[1]})")  # Y-axis label with feature name
+        # **Added Variance Explained, Grid, Titles, and Axis Labels for PCA plot**
+        explained_variance = pca.explained_variance_ratio_ * 100  # Percentage of variance explained
+        plt.scatter(pca_result[:, 0], pca_result[:, 1], alpha=0.7)  # Scatter plot of PCA components
+        plt.title(f"PCA Analysis: {numerical_features_to_plot[0]} vs {numerical_features_to_plot[1]}", fontsize=14)
+        plt.xlabel(f"Principal Component 1 ({numerical_features_to_plot[0]}) - {explained_variance[0]:.2f}% Variance", fontsize=12)
+        plt.ylabel(f"Principal Component 2 ({numerical_features_to_plot[1]}) - {explained_variance[1]:.2f}% Variance", fontsize=12)
+        plt.grid(True, linestyle='--', alpha=0.7)  # Add grid for readability
 
         pca_path = "pca_analysis.png"
         plt.savefig(pca_path, dpi=100)
@@ -138,18 +144,25 @@ def perform_generic_analysis(df, include_outliers=True):
 
     # Outlier detection using Isolation Forest (512x512 px)
     outlier_path = None
-    if include_outliers and len(analysis['numerical_features']) > 1:
+    if include_outliers and len(numerical_features_to_plot) > 1:
         isolation_forest = IsolationForest(contamination=OUTLIER_CONTAMINATION)
-        outliers = isolation_forest.fit_predict(df[analysis['numerical_features']])
+        outliers = isolation_forest.fit_predict(df[numerical_features_to_plot])
         df['outliers'] = outliers
 
-        # **Added Titles and Axis Labels for Outlier plot with specific feature names**
-        outlier_feature_names = analysis['numerical_features'][:2]  # Use the first two features for the plot
+        # **Highlighted Outliers with Different Colors, Annotations, and Data Density Visualization**
         plt.figure(figsize=FIGURE_SIZE)
-        sns.scatterplot(x=df[outlier_feature_names[0]], y=df[outlier_feature_names[1]], hue=df['outliers'], palette='coolwarm')
-        plt.title(f"Outlier Detection: {outlier_feature_names[0]} vs {outlier_feature_names[1]}")  # Title with feature names
-        plt.xlabel(outlier_feature_names[0])  # X-axis label with feature name
-        plt.ylabel(outlier_feature_names[1])  # Y-axis label with feature name
+        sns.scatterplot(x=df[numerical_features_to_plot[0]], y=df[numerical_features_to_plot[1]], 
+                        hue=df['outliers'], palette='coolwarm', style=df['outliers'], markers=["o", "X"], s=100)
+        
+        # Annotating outliers if needed (Example: Labeling the first 3 outliers)
+        for i in range(3):
+            plt.text(df[numerical_features_to_plot[0]].iloc[i], df[numerical_features_to_plot[1]].iloc[i], 
+                     f"Outlier {i+1}", fontsize=9, ha='right', color='black')
+
+        plt.title(f"Outlier Detection: {numerical_features_to_plot[0]} vs {numerical_features_to_plot[1]}", fontsize=14)
+        plt.xlabel(numerical_features_to_plot[0], fontsize=12)
+        plt.ylabel(numerical_features_to_plot[1], fontsize=12)
+        plt.legend(title="Outliers", loc='upper right')
 
         outlier_path = "outliers.png"
         plt.savefig(outlier_path, dpi=100)
@@ -158,7 +171,6 @@ def perform_generic_analysis(df, include_outliers=True):
     # Collecting the analysis results
     analysis['plots'] = [heatmap_path, pca_path, outlier_path]
     return analysis
-
 
 def generate_llm_prompt(analysis):
     """Generate prompt for LLM integration based on analysis."""
