@@ -11,6 +11,7 @@
 #    "sklearn",
 #    "scipy",
 #    "logging"
+#    "numpy"
 #]
 #///
 
@@ -33,7 +34,7 @@ import logging
 # Constants for configurable values
 MAX_TOKENS = 1000
 FIGURE_SIZE = (5, 5)
-OUTLIER_CONTAMINATION = 0.1  # Proportion of outliers expected
+OUTLIER_CONTAMINATION = 0.1
 ENCODINGS = ['utf-8', 'latin1', 'windows-1252', 'utf-16', 'iso-8859-2', 'cp1250', 'mac-roman']
 
 # API settings
@@ -81,7 +82,7 @@ def perform_generic_analysis(df, include_outliers=True):
     }
     analysis['summary_stats'] = df.describe(include='all')
 
-    # Handle missing values
+    # Count missing values in each column
     analysis['missing_values'] = df.isnull().sum()
 
     # Skewness of numerical features
@@ -94,38 +95,43 @@ def perform_generic_analysis(df, include_outliers=True):
 
     # Handle missing numerical data before PCA, Imputation using the mean strategy
     numerical_features_for_imputation = df[analysis['numerical_features']]
-    imputer = SimpleImputer(strategy='mean')  # You can also use 'median' instead of 'mean'
+    imputer = SimpleImputer(strategy='mean')  # Impute missing values with mean
     df[analysis['numerical_features']] = imputer.fit_transform(numerical_features_for_imputation)
 
     # Correlation heatmap (512x512 px)
     plt.figure(figsize=FIGURE_SIZE)
-
-    # Ensure that we only compute correlation on numerical features
     numerical_df = df[analysis['numerical_features']].select_dtypes(include=np.number)
-    
-    # Compute correlation matrix on only numerical columns
     correlation_matrix = numerical_df.corr()
 
     # Plot the heatmap if there are numerical columns
     heatmap_path = None
     if not correlation_matrix.empty:
         sns.heatmap(correlation_matrix, annot=True, cmap='coolwarm', fmt=".2f")
+        
+        # **Added Titles and Axis Labels**
+        plt.title("Correlation Heatmap of Numerical Features")  # Title for the heatmap
+        plt.xlabel("Features")  # X-axis label
+        plt.ylabel("Features")  # Y-axis label
+        
         heatmap_path = "correlation_heatmap.png"
         plt.savefig(heatmap_path, dpi=100)
         plt.close()
 
-    # PCA analysis (512x512 px)
+    # PCA Analysis (512x512 px)
     pca_path = None
     if len(analysis['numerical_features']) > 1:
         plt.figure(figsize=FIGURE_SIZE)
-        # Standardize the numerical features for PCA
         df_scaled = StandardScaler().fit_transform(df[analysis['numerical_features']])
         pca = PCA(n_components=2)
         pca_result = pca.fit_transform(df_scaled)
-        
-        # Scatter plot of PCA results
-        plt.scatter(pca_result[:, 0], pca_result[:, 1])
-        plt.title("PCA Analysis")
+
+        # **Added Titles and Axis Labels for PCA plot with specific feature names**
+        pca_feature_names = analysis['numerical_features'][:2]  # Take the first two numerical features
+        plt.scatter(pca_result[:, 0], pca_result[:, 1])  # Scatter plot of PCA components
+        plt.title(f"PCA Analysis: {pca_feature_names[0]} vs {pca_feature_names[1]}")  # Title with feature names
+        plt.xlabel(f"Principal Component 1 ({pca_feature_names[0]})")  # X-axis label with feature name
+        plt.ylabel(f"Principal Component 2 ({pca_feature_names[1]})")  # Y-axis label with feature name
+
         pca_path = "pca_analysis.png"
         plt.savefig(pca_path, dpi=100)
         plt.close()
@@ -136,10 +142,15 @@ def perform_generic_analysis(df, include_outliers=True):
         isolation_forest = IsolationForest(contamination=OUTLIER_CONTAMINATION)
         outliers = isolation_forest.fit_predict(df[analysis['numerical_features']])
         df['outliers'] = outliers
-        
-        # Scatter plot of the outliers
+
+        # **Added Titles and Axis Labels for Outlier plot with specific feature names**
+        outlier_feature_names = analysis['numerical_features'][:2]  # Use the first two features for the plot
         plt.figure(figsize=FIGURE_SIZE)
-        sns.scatterplot(x=df.iloc[:, 0], y=df.iloc[:, 1], hue=df['outliers'], palette='coolwarm')
+        sns.scatterplot(x=df[outlier_feature_names[0]], y=df[outlier_feature_names[1]], hue=df['outliers'], palette='coolwarm')
+        plt.title(f"Outlier Detection: {outlier_feature_names[0]} vs {outlier_feature_names[1]}")  # Title with feature names
+        plt.xlabel(outlier_feature_names[0])  # X-axis label with feature name
+        plt.ylabel(outlier_feature_names[1])  # Y-axis label with feature name
+
         outlier_path = "outliers.png"
         plt.savefig(outlier_path, dpi=100)
         plt.close()
@@ -149,7 +160,6 @@ def perform_generic_analysis(df, include_outliers=True):
     return analysis
 
 
-# Generate the LLM prompt based on the analysis
 def generate_llm_prompt(analysis):
     """Generate prompt for LLM integration based on analysis."""
     image_paths = f"Images: {', '.join(analysis['plots'])}"
@@ -177,15 +187,15 @@ def generate_llm_prompt(analysis):
     return prompt
 
 
-# Save the LLM narrative to a README file
 def save_narrative_to_readme(narrative, folder):
     """Save the generated narrative into a README.md file inside the specified folder."""
-    readme_path = os.path.join(folder, "README.md")  # Save the README in the specified folder
+    readme_path = os.path.join(folder, "README.md")
     with open(readme_path, "w") as readme_file:
         readme_file.write(narrative)
 
 
 def query_llm(prompt):
+    """Query the LLM API to generate a narrative based on the analysis prompt."""
     headers = {
         "Authorization": f"Bearer {AIPROXY_TOKEN}",
         "Content-Type": "application/json"
@@ -217,7 +227,7 @@ def main(dataset_path, include_outliers=True):
     
     # Create a unique folder based on the CSV filename 
     dataset_name = os.path.splitext(os.path.basename(dataset_path))[0] 
-    output_folder = f"analysis_{dataset_name}" 
+    output_folder = f"analysis_{dataset_name}"
 
     # Create the directory if it doesn't exist
     try:
@@ -248,6 +258,7 @@ def main(dataset_path, include_outliers=True):
     logging.info("Narrative saved in README.md")
 
 
+# Command-line execution check
 if len(sys.argv) < 2:
     logging.error("Usage: uv autolysis.py <dataset.csv>")
     sys.exit(1)
@@ -255,5 +266,5 @@ if len(sys.argv) < 2:
 # Retrieve the CSV file from the command-line argument
 csv_file = sys.argv[1]
 
-# Run the data loading and analysis
+# Run the analysis
 main(csv_file)
